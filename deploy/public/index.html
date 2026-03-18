@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c0a10" />
+    <meta name="description" content="Gemini AI 기반 소설 집필 스튜디오" />
+    <title>Novel Maker</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="loadingOverlay" class="loading-overlay" aria-hidden="true">
+      <div class="loading-card">
+        <div class="loading-spinner"></div>
+        <p id="loadingMessage">작업 중입니다.</p>
+      </div>
+    </div>
+
+    <!-- Mobile hamburger -->
+    <button id="hamburgerBtn" class="hamburger-btn" type="button" aria-label="메뉴 열기">☰</button>
+    <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+    <div class="app-shell">
+      <aside id="sidebar" class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Gemini Novel Studio</p>
+          <h1>Novel Maker</h1>
+          <p class="brand-copy">프로젝트를 고르고, 챕터를 수정하고, 필요할 때만 바이블을 만집니다.</p>
+        </div>
+
+        <div class="sidebar-tools">
+          <input id="projectSearchInput" type="search" placeholder="프로젝트 검색" />
+          <div class="button-row vertical">
+            <button id="toggleCreatePanelButton" class="primary-button" type="button">새 프로젝트</button>
+            <button id="importProjectButton" class="ghost-button" type="button">프로젝트 가져오기</button>
+            <button id="refreshProjectsButton" class="ghost-button" type="button">새로고침</button>
+            <input type="file" id="importFileInput" accept=".json" class="hidden" />
+          </div>
+        </div>
+
+        <div id="projectList" class="project-list"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Current Project</p>
+            <h2 id="currentProjectTitle">프로젝트를 선택하거나 새로 만드세요</h2>
+            <p id="currentProjectMeta" class="workspace-copy">왼쪽 목록에서 작품을 고르면 바로 읽고 수정할 수 있습니다.</p>
+          </div>
+          <div id="projectActionBar" class="button-row hidden">
+            <button id="renameProjectButton" class="ghost-button" type="button">이름 변경</button>
+            <button id="exportProjectButton" class="ghost-button" type="button">내보내기</button>
+            <button id="deleteProjectButton" class="danger-button" type="button">삭제</button>
+          </div>
+        </header>
+
+        <section id="composerPanel" class="surface composer-panel is-collapsed">
+          <form id="createProjectForm" class="stack">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">New Project</p>
+                <h3>새 프로젝트 생성</h3>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>작품 요청사항</span>
+              <textarea
+                name="request"
+                rows="7"
+                placeholder="핵심 설정, 첫 장면, 분위기, 주인공 상태를 적으세요."
+                required
+              ></textarea>
+            </label>
+
+            <div class="grid two">
+              <label class="field">
+                <span>프로젝트 제목</span>
+                <input name="title" type="text" placeholder="비워두면 요청사항에서 추출" />
+              </label>
+
+              <label class="field">
+                <span>Gemini API Key</span>
+                <input id="apiKeyInput" name="apiKey" type="password" placeholder="AIza..." autocomplete="off" />
+              </label>
+            </div>
+
+            <details class="advanced-settings">
+              <summary>고급 설정</summary>
+              <div class="grid two">
+                <label class="field">
+                  <span>모델</span>
+                  <input id="modelInput" name="model" type="text" value="gemini-3.1-pro-preview" />
+                </label>
+
+                <label class="field">
+                  <span>장르/스타일 태그</span>
+                  <input name="tags" type="text" placeholder="다크 판타지, 정치극" />
+                </label>
+
+                <label class="field">
+                  <span>장르 프레임워크</span>
+                  <input name="genreFramework" type="text" placeholder="로판, 무협, 현대 스릴러" />
+                </label>
+
+                <label class="field">
+                  <span>권장 분량</span>
+                  <input name="chapterLength" type="text" value="1800~2600자" />
+                </label>
+
+                <label class="field">
+                  <span>시점</span>
+                  <select name="pov">
+                    <option value="3인칭 제한 시점">3인칭 제한 시점</option>
+                    <option value="1인칭 주인공 시점">1인칭 주인공 시점</option>
+                    <option value="전지적 3인칭">전지적 3인칭</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  <span>호흡과 리듬</span>
+                  <select name="pacing">
+                    <option value="중간 호흡">중간 호흡</option>
+                    <option value="빠른 호흡">빠른 호흡</option>
+                    <option value="느린 호흡">느린 호흡</option>
+                  </select>
+                </label>
+              </div>
+            </details>
+
+            <div class="button-row">
+              <button id="createProjectButton" class="primary-button" type="submit">1화 생성</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="surface workspace-card">
+          <div id="statusBox" class="status-box info">프로젝트를 선택하거나 새로 만드세요.</div>
+
+          <div class="tab-row">
+            <button id="manuscriptTabButton" class="tab-button active" type="button">본문</button>
+            <button id="bibleTabButton" class="tab-button" type="button">스토리 바이블</button>
+          </div>
+
+          <section id="manuscriptPane" class="pane is-active">
+            <div id="chapterStrip" class="chapter-strip"></div>
+            <div id="chapterContent" class="chapter-content empty-state">챕터를 선택하면 여기에 표시됩니다.</div>
+
+            <form id="continueForm" class="surface subtle-card">
+              <label class="field">
+                <span>다음 화 가이드</span>
+                <textarea
+                  id="guidanceInput"
+                  name="guidance"
+                  rows="4"
+                  placeholder="비워두면 현재 흐름에 맞는 다음 장면을 자동으로 이어 씁니다."
+                ></textarea>
+              </label>
+              <div class="button-row">
+                <button id="continueButton" class="primary-button" type="submit" disabled>다음 화 생성</button>
+              </div>
+            </form>
+          </section>
+
+          <section id="biblePane" class="pane">
+            <div id="storyBibleView" class="story-bible empty-state">스토리 바이블이 여기에 표시됩니다.</div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
