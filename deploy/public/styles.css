@@ -139,11 +139,13 @@ select option { background: #1a1520; color: var(--ink); }
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(4px);
   opacity: 0;
+  pointer-events: none;
   transition: opacity 280ms var(--ease);
 }
 
 .sidebar-overlay.visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /* ─── Sidebar ─── */
