@@ -839,6 +839,15 @@ function renderStoryBible() {
     </div>
 
     <section class="info-card">
+      <span class="label">아크(Arc) 요약</span>
+      ${renderList(bible.arc_summaries || [], (arc) => `
+        <li>
+          <strong>${escapeHtml(arc.arc_name)} (챕터 ${escapeHtml(arc.chapter_range)})</strong>
+          <p>${escapeHtml(arc.summary)}</p>
+        </li>
+      `)}
+    </section>
+    <section class="info-card">
       <span class="label">현재 플롯 상태</span>
       <p>${escapeHtml(bible.current_plot_state || "아직 정리되지 않았습니다.")}</p>
     </section>

@@ -399,6 +399,7 @@ async function continueProject(projectId, payload) {
   const chapter = await generateContinuationChapter(project, apiKey, payload.guidance || "");
   project.chapters.push(chapter);
   project.storyBible = await safeUpdateStoryBible(project, chapter, apiKey);
+  await summarizeArcsIfNeeded(project, apiKey);
   project.updatedAt = new Date().toISOString();
   await writeProject(project);
   return project;
@@ -580,19 +581,43 @@ async function generateOpeningChapter(project, apiKey) {
     input: buildInitialUserPrompt(project.config)
   });
   const parsed = parseNovelPayload(extractGeminiText(response));
-  return normalizeChapter(parsed.json, 1, parsed.xml);
+  const chapter = normalizeChapter(parsed.json, 1, parsed.xml);
+  try {
+    chapter.embedding = await callGeminiEmbedding({ apiKey, text: chapter.chapterText });
+  } catch(e) { console.warn("Embedding failed for chapter 1", e.message); }
+  return chapter;
 }
 
 async function generateContinuationChapter(project, apiKey, guidance) {
   const nextChapterNumber = project.chapters.length + 1;
+  
+  let ragContext = "";
+  if (project.chapters.length >= 3) {
+    const query = guidance || project.storyBible.current_plot_state || project.title;
+    try {
+      const queryEmbedding = await callGeminiEmbedding({ apiKey, text: query });
+      const candidates = project.chapters.slice(0, -2).filter(c => c.embedding); 
+      for (const c of candidates) {
+         c._similarity = cosineSimilarity(queryEmbedding, c.embedding);
+      }
+      candidates.sort((a,b) => b._similarity - a._similarity);
+      const top = candidates.slice(0, 1);
+      ragContext = top.map(c => `[과거 연관 챕터: ${c.chapterNumber}화 ${c.chapterTitle}]\n${c.chapterText.slice(-1500)}`).join("\n\n");
+    } catch(e) { console.warn("RAG search failed", e.message); }
+  }
+
   const response = await callGemini({
     apiKey,
     model: project.config.model,
     instructions: NOVEL_SYSTEM_PROMPT,
-    input: buildContinuationPrompt(project, nextChapterNumber, guidance)
+    input: buildContinuationPrompt(project, nextChapterNumber, guidance, ragContext)
   });
   const parsed = parseNovelPayload(extractGeminiText(response));
-  return normalizeChapter(parsed.json, nextChapterNumber, parsed.xml);
+  const chapter = normalizeChapter(parsed.json, nextChapterNumber, parsed.xml);
+  try {
+    chapter.embedding = await callGeminiEmbedding({ apiKey, text: chapter.chapterText });
+  } catch(e) { console.warn("Embedding failed", e.message); }
+  return chapter;
 }
 
 async function rewriteLatestChapter(project, apiKey, chapterNumber, guidance) {
@@ -603,7 +628,11 @@ async function rewriteLatestChapter(project, apiKey, chapterNumber, guidance) {
     input: buildRewritePrompt(project, chapterNumber, guidance)
   });
   const parsed = parseNovelPayload(extractGeminiText(response));
-  return normalizeChapter(parsed.json, chapterNumber, parsed.xml);
+  const chapter = normalizeChapter(parsed.json, chapterNumber, parsed.xml);
+  try {
+    chapter.embedding = await callGeminiEmbedding({ apiKey, text: chapter.chapterText });
+  } catch(e) { console.warn("Embedding failed", e.message); }
+  return chapter;
 }
 
 async function safeUpdateStoryBible(project, chapter, apiKey) {
@@ -668,6 +697,75 @@ async function callGemini({ apiKey, model, instructions, input, jsonSchema }) {
   }
 
   return data;
+}
+
+async function callGeminiEmbedding({ apiKey, text, model = "text-embedding-004" }) {
+  const body = {
+    content: {
+      parts: [{ text: text.substring(0, 9500) }] // prevent exceeding embedding max limits
+    }
+  };
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:embedContent`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Gemini embedding request failed");
+  }
+
+  return data.embedding.values;
+}
+
+function cosineSimilarity(vecA, vecB) {
+  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+  let dotProduct = 0, normA = 0, normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function summarizeArcsIfNeeded(project, apiKey) {
+  if (project.chapters.length > 0 && project.chapters.length % 10 === 0) {
+    const startChapter = project.chapters.length - 9;
+    const endChapter = project.chapters.length;
+    const chaptersToSummarize = project.chapters.slice(-10);
+    
+    const textToSummarize = chaptersToSummarize.map(c => `[Chapter ${c.chapterNumber}]\nTitle: ${c.chapterTitle}\nSummary: ${c.chapterSummary}`).join("\n\n");
+    const arcPrompt = `Summarize the following 10 chapters into a single strong narrative arc summary (around 300-500 words). Focus on character development, major plot points, and unresolved tensions.\n\n${textToSummarize}`;
+    
+    try {
+      const response = await callGemini({
+        apiKey,
+        model: "gemini-3.1-pro-preview",
+        input: arcPrompt
+      });
+      
+      const arcSummaryText = extractGeminiText(response);
+      const arcObj = {
+        arc_name: `Arc ${Math.ceil(endChapter / 10)}`,
+        chapter_range: `${startChapter}-${endChapter}`,
+        summary: arcSummaryText
+      };
+      
+      if (!project.storyBible.arc_summaries) project.storyBible.arc_summaries = [];
+      project.storyBible.arc_summaries.push(arcObj);
+      
+      // Keep only recent 10 summaries in storyBible to save tokens
+      project.storyBible.chapter_summaries = project.storyBible.chapter_summaries.slice(-10);
+      
+    } catch (e) { console.warn("Arc summarize failed", e.message); }
+  }
 }
 
 function normalizeProjectConfig(payload) {
@@ -747,18 +845,28 @@ function buildPlotThreadDigest(project, limit = 5) {
     .join("\n");
 }
 
-function buildContinuationPrompt(project, nextChapterNumber, guidance) {
+function buildContinuationPrompt(project, nextChapterNumber, guidance, ragContext = "") {
   const lastChapter = project.chapters.at(-1);
   const context = lastChapter ? lastChapter.chapterText.slice(-LAST_SCENE_CONTEXT_SIZE) : "";
   const userGuidance = cleanString(guidance) || "현재 플롯의 흐름에 따라 가장 개연성 있는 전개를 이어가십시오.";
   const recentChapterDigest = buildRecentChapterDigest(project);
   const plotThreadDigest = buildPlotThreadDigest(project);
 
+  const cleanStoryBible = { ...project.storyBible };
+  delete cleanStoryBible.arc_summaries; // save tokens if needed, we display them custom
+  
+  const arcSummariesSection = project.storyBible.arc_summaries && project.storyBible.arc_summaries.length > 0 
+    ? `\n### 이전 아크(Arc) 요약\n${project.storyBible.arc_summaries.map(a => `- ${a.arc_name} (${a.chapter_range}): ${a.summary}`).join('\n')}` 
+    : "";
+
+  const ragSection = ragContext ? `\n### [RAG] 과거 연관 장면 레퍼런스\n${ragContext}\n` : "";
+
   return `## ENTRY [1]: CONTINUATION_MODULE
 Priority: **[HIGH]** | Activation: Ongoing
 
 [스토리 바이블 모듈 삽입]
-${JSON.stringify(project.storyBible, null, 2)}
+${JSON.stringify(cleanStoryBible, null, 2)}
+${arcSummariesSection}${ragSection}
 
 [시점 통제 모듈 삽입: ${project.config.pov}]
 [호흡과 리듬 모듈 삽입: ${project.config.pacing}]
